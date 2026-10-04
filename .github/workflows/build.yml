@@ -133,6 +133,22 @@ jobs:
               }
             }
 
+      - name: Inspect cuDNN
+        shell: powershell
+        run: |
+          Write-Host "CUDNN_HOME = $env:CUDNN_HOME"
+
+          if (!(Test-Path $env:CUDNN_HOME)) {
+            throw "CUDNN_HOME does not exist"
+          }
+
+          Get-ChildItem $env:CUDNN_HOME -Recurse -File |
+            Where-Object {
+              $_.Name -match 'cudnn' -or
+              $_.Extension -in '.lib','.dll','.h'
+            } |
+            Select-Object FullName
+
 
       - name: Build ONNX Runtime
         shell: cmd
