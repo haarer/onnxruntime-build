@@ -1,0 +1,161 @@
+
+name: Build ONNX Runtime CUDA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: "${{ matrix.gpu }} (SM${{ matrix.arch }})"
+
+    runs-on: windows-2025
+
+    strategy:
+      fail-fast: false
+
+      matrix:
+        include:
+          - gpu: rtx-4090
+            arch: "89"
+
+          - gpu: rtx-5090
+            arch: "120"
+
+    steps:
+
+      - name: Checkout ONNX Runtime
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/onnxruntime
+          ref: v1.30.0
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy packaging sympy flatbuffers protobuf
+
+      - name: Install CUDA 13.0
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $url = "https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda_13.0.0_windows.exe"
+          $installer = "$env:RUNNER_TEMP\cuda.exe"
+
+          Write-Host "Downloading CUDA..."
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $installer
+
+          Write-Host "Installing CUDA..."
+          Start-Process `
+            -FilePath $installer `
+            -ArgumentList "-s" `
+            -Wait `
+            -NoNewWindow
+
+          $cuda = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.0"
+
+          if (!(Test-Path "$cuda\bin\nvcc.exe")) {
+            throw "CUDA installation failed: nvcc.exe not found"
+          }
+
+          "CUDA_HOME=$cuda" >> $env:GITHUB_ENV
+          "CUDA_PATH=$cuda" >> $env:GITHUB_ENV
+
+          "$cuda\bin" >> $env:GITHUB_PATH
+
+      - name: Verify CUDA
+        shell: powershell
+        run: |
+          Write-Host "CUDA_HOME=$env:CUDA_HOME"
+          nvcc --version
+
+      - name: Install cuDNN
+        shell: powershell
+        run: |
+          python -m pip install nvidia-cudnn-cu13
+
+      - name: Locate cuDNN
+        shell: powershell
+        run: |
+          $cudnn = python -c "import nvidia.cudnn; print(nvidia.cudnn.__path__[0])"
+
+          Write-Host "cuDNN directory:"
+          Write-Host $cudnn
+
+          if (!(Test-Path $cudnn)) {
+            throw "cuDNN installation failed"
+          }
+
+          "CUDNN_HOME=$cudnn" >> $env:GITHUB_ENV
+
+      - name: Show build environment
+        shell: powershell
+        run: |
+          Write-Host "=============================="
+          Write-Host "GPU       : ${{ matrix.gpu }}"
+          Write-Host "CUDA arch : ${{ matrix.arch }}"
+          Write-Host "CUDA_HOME : $env:CUDA_HOME"
+          Write-Host "CUDNN_HOME: $env:CUDNN_HOME"
+          Write-Host "=============================="
+
+      - name: Build ONNX Runtime
+        shell: cmd
+        run: |
+          call build.bat ^
+            --config Release ^
+            --build_shared_lib ^
+            --skip_tests ^
+            --use_cuda ^
+            --cuda_version 13.0 ^
+            --cuda_home "%CUDA_HOME%" ^
+            --cudnn_home "%CUDNN_HOME%" ^
+            --cmake_generator "Visual Studio 17 2022" ^
+            --parallel 4 ^
+            --nvcc_threads 1 ^
+            --cmake_extra_defines "CMAKE_CUDA_ARCHITECTURES=${{ matrix.arch }}"
+
+      - name: Collect artifacts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $name = "onnxruntime-cuda-${{ matrix.gpu }}-sm${{ matrix.arch }}"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "artifact\$name" | Out-Null
+
+          Get-ChildItem `
+            -Path "build\Windows\Release" `
+            -Recurse `
+            -Include *.dll,*.lib `
+            | Copy-Item `
+                -Destination "artifact\$name" `
+                -Force
+
+          @"
+          ORT_VERSION=1.30.0
+          GPU=${{ matrix.gpu }}
+          CUDA_ARCH=${{ matrix.arch }}
+          CUDA_VERSION=13.0
+          PLATFORM=windows-x64
+          "@ | Set-Content `
+            "artifact\$name\BUILD-INFO.txt"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: onnxruntime-cuda-${{ matrix.gpu }}-sm${{ matrix.arch }}
+          path: artifact/
+          if-no-files-found: error
