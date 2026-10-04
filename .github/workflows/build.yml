@@ -7,7 +7,7 @@ jobs:
   build:
     name: "${{ matrix.gpu }} (SM${{ matrix.arch }})"
 
-    runs-on: windows-2025
+    runs-on: windows-2022
 
     strategy:
       fail-fast: false
@@ -142,6 +142,7 @@ jobs:
             --build_shared_lib ^
             --skip_tests ^
             --use_cuda ^
+            --cmake_generator "Visual Studio 17 2022"
             --cuda_version 13.0 ^
             --cuda_home "%CUDA_HOME%" ^
             --cudnn_home "%CUDNN_HOME%" ^
